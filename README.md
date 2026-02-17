@@ -2,14 +2,14 @@
 
 Multi-account AWS Cost and Usage Report (CUR) aggregation and analysis. This module provides two submodules:
 
-- **`modules/source`** - Deployed in each source AWS account. Creates CUR report definition, S3 bucket, and event notification to forward reports to the target account.
+- **`modules/source`** - Deployed in each source AWS account. Optionally creates CUR report definition, S3 bucket, and event notification (direct Lambda or SNS) to forward reports to the target account.
 - **`modules/target`** - Deployed in the central/target AWS account. Aggregates CUR reports from multiple source accounts using a Lambda function, with optional Athena/Glue analysis and IAM access management.
 
 ## Architecture
 
 ```
 ┌─────────────────────┐     ┌─────────────────────┐
-│  Source Account A    │     │  Source Account B    │
+│  Source Account A   │     │  Source Account B   │
 │                     │     │                     │
 │  CUR Report → S3    │     │  CUR Report → S3    │
 │       │             │     │       │             │
@@ -74,9 +74,34 @@ module "cur_source" {
 }
 ```
 
+### 3. Source module with existing bucket and SNS
+
+```terraform
+module "cur_source" {
+  source = "cookielab/cost-reporting/aws//modules/source"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  create_bucket = false
+  create_report = false
+  s3_bucket_name = "my-existing-cur-bucket"
+
+  use_sns             = true
+  sns_subscriber_arns = ["arn:aws:iam::000000000000:root"]
+
+  lambda_function_role_arn = "arn:aws:iam::000000000000:role/cur-forwarder-role"
+}
+```
+
 ## Source Module
 
-Creates AWS CUR report definition and S3 bucket in a source account, with cross-account access for the target Lambda.
+Creates AWS CUR report definition and S3 bucket in a source account, with cross-account access for the target Lambda. Both bucket and report creation are optional for accounts that already have them configured.
+
+Supports two notification modes:
+- **Direct Lambda** (default) - S3 event triggers Lambda directly
+- **SNS** (`use_sns = true`) - S3 event publishes to SNS topic, target Lambda subscribes
 
 ### Requirements
 
@@ -89,13 +114,19 @@ Creates AWS CUR report definition and S3 bucket in a source account, with cross-
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| lambda_function_arn | ARN of the Lambda function in the target account | `string` | n/a | yes |
+| create_bucket | Whether to create a new S3 bucket or use existing | `bool` | `true` | no |
+| create_report | Whether to create a new CUR report definition | `bool` | `true` | no |
+| lambda_function_arn | ARN of the Lambda function (required when `use_sns = false`) | `string` | `""` | no |
 | lambda_function_role_arn | ARN of the IAM role for the Lambda function (for bucket policy) | `string` | n/a | yes |
+| use_sns | Use SNS topic instead of direct Lambda invocation | `bool` | `false` | no |
+| sns_topic_name | SNS topic name (defaults to `cur-notifications-{account_id}`) | `string` | `null` | no |
+| sns_subscriber_arns | ARNs allowed to subscribe to the SNS topic | `list(string)` | `[]` | no |
 | s3_bucket_name | S3 bucket name (defaults to `cur-csv-{account_id}`) | `string` | `null` | no |
+| s3_bucket_lifecycle | S3 lifecycle transitions (only when `create_bucket = true`) | `object` | `{transition_to_ia_days=90, transition_to_glacier_days=180}` | no |
 | cur_time_unit | Time unit for CUR report (`HOURLY` or `DAILY`) | `string` | `"HOURLY"` | no |
 | cur_format | Report format (`textORcsv` or `Parquet`) | `string` | `"textORcsv"` | no |
 | cur_compression | Compression (`GZIP`, `ZIP`, or `Parquet`) | `string` | `"GZIP"` | no |
-| s3_bucket_lifecycle | S3 lifecycle transitions | `object` | `{transition_to_ia_days=90, transition_to_glacier_days=180}` | no |
+| cur_s3_prefix | S3 prefix for existing CUR report (only when `create_report = false`) | `string` | `"cur-reports"` | no |
 | tags | Tags to apply to resources | `map(string)` | `{}` | no |
 
 ### Outputs
@@ -105,9 +136,10 @@ Creates AWS CUR report definition and S3 bucket in a source account, with cross-
 | bucket_id | ID of the CUR S3 bucket |
 | bucket_arn | ARN of the CUR S3 bucket |
 | bucket_name | Name of the CUR S3 bucket |
-| cur_report_name | Name of the CUR report |
+| cur_report_name | Name of the CUR report (null if `create_report = false`) |
 | cur_prefix | S3 prefix where CUR reports are stored |
 | account_id | AWS Account ID |
+| sns_topic_arn | ARN of the SNS topic (null if `use_sns = false`) |
 
 ## Target Module
 
