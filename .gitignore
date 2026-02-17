@@ -1,0 +1,9 @@
+.infracost
+.terraform
+.terraform.tfstate.lock.info
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+.terraform.lock.hcl
+.infracost
+.terraform-version

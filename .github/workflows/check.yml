@@ -1,0 +1,79 @@
+name: Check
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  fmt:
+    name: Terraform Format
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cookielab/container-image-terraform:1.14
+      options: --user root
+      credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Check Terraform format
+        run: terraform fmt -check=true -recursive
+  lint:
+    name: TF Lint
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cookielab/container-image-terraform:1.14
+      options: --user root
+      credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Check TF lint - source module
+        run: tflint --chdir=modules/source
+      - name: Check TF lint - target module
+        run: tflint --chdir=modules/target
+  validate-source:
+    name: Validate Source Module
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cookielab/container-image-terraform:1.14
+      options: --user root
+      credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Inject additional provider
+        uses: "finnp/create-file-action@master"
+        env:
+          FILE_NAME: "modules/source/test_injection.tf"
+          FILE_DATA: |
+            provider "aws" {
+              alias = "us_east_1"
+            }
+      - name: Terraform init
+        run: terraform -chdir=modules/source init
+      - name: Terraform validate
+        run: terraform -chdir=modules/source validate
+  validate-target:
+    name: Validate Target Module
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cookielab/container-image-terraform:1.14
+      options: --user root
+      credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Terraform init
+        run: terraform -chdir=modules/target init
+      - name: Terraform validate
+        run: terraform -chdir=modules/target validate
