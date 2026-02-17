@@ -81,12 +81,6 @@ variable "lambda_function_name" {
   default     = "cur-forwarder"
 }
 
-variable "lambda_artifacts_dir" {
-  description = "Directory name where Lambda build artifacts are stored (must be unique per module instance to avoid race conditions)"
-  type        = string
-  default     = "builds"
-}
-
 variable "log_retention_days" {
   description = "CloudWatch log retention in days"
   type        = number
