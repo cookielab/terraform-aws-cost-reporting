@@ -41,7 +41,7 @@ data "aws_iam_policy_document" "bucket_policy" {
       resources = [local.bucket_arn]
 
       condition {
-        test     = "StringEquals"
+        test     = "StringLike"
         variable = "aws:SourceArn"
         values   = [aws_cur_report_definition.this[0].arn]
       }
@@ -71,7 +71,7 @@ data "aws_iam_policy_document" "bucket_policy" {
       resources = ["${local.bucket_arn}/*"]
 
       condition {
-        test     = "StringEquals"
+        test     = "StringLike"
         variable = "aws:SourceArn"
         values   = [aws_cur_report_definition.this[0].arn]
       }
