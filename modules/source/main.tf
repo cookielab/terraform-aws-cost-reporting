@@ -41,12 +41,6 @@ data "aws_iam_policy_document" "bucket_policy" {
       resources = [local.bucket_arn]
 
       condition {
-        test     = "StringLike"
-        variable = "aws:SourceArn"
-        values   = [aws_cur_report_definition.this[0].arn]
-      }
-
-      condition {
         test     = "StringEquals"
         variable = "aws:SourceAccount"
         values   = [data.aws_caller_identity.current.account_id]
@@ -69,12 +63,6 @@ data "aws_iam_policy_document" "bucket_policy" {
       actions = ["s3:PutObject"]
 
       resources = ["${local.bucket_arn}/*"]
-
-      condition {
-        test     = "StringLike"
-        variable = "aws:SourceArn"
-        values   = [aws_cur_report_definition.this[0].arn]
-      }
 
       condition {
         test     = "StringEquals"
