@@ -1,34 +1,33 @@
-output "bucket_id" {
-  description = "ID of the CUR S3 bucket"
-  value       = local.bucket_id
+# =============================================================================
+# CUR 2.0 Source Module - Outputs
+# =============================================================================
+
+output "export_arn" {
+  description = "ARN of the CUR 2.0 export (the Cloud Control primary identifier)."
+  value       = aws_cloudcontrolapi_resource.cur2_export.id
 }
 
-output "bucket_arn" {
-  description = "ARN of the CUR S3 bucket"
-  value       = local.bucket_arn
-}
-
-output "bucket_name" {
-  description = "Name of the CUR S3 bucket"
-  value       = local.bucket_name
-}
-
-output "cur_report_name" {
-  description = "Name of the CUR report"
-  value       = var.create_report ? aws_cur_report_definition.this[0].report_name : null
-}
-
-output "cur_prefix" {
-  description = "S3 prefix where CUR reports are stored"
-  value       = local.cur_s3_prefix
+output "export_name" {
+  description = "Name of the export. Also the value of the report_name Glue partition."
+  value       = var.export_name
 }
 
 output "account_id" {
-  description = "AWS Account ID where this module is deployed"
-  value       = data.aws_caller_identity.current.account_id
+  description = "AWS account ID this export was created in. Also the value of the source_account_id Glue partition."
+  value       = local.account_id
 }
 
-output "sns_topic_arn" {
-  description = "ARN of the SNS topic for CUR notifications (null if use_sns = false)"
-  value       = var.use_sns ? aws_sns_topic.cur[0].arn : null
+output "s3_prefix" {
+  description = "Prefix under the destination bucket the export writes to."
+  value       = local.s3_prefix
+}
+
+output "s3_destination" {
+  description = "Root S3 path the reports are written under. The data/ and metadata/ partitions live below this."
+  value       = "s3://${var.destination_bucket}/${local.s3_prefix}/${var.export_name}/"
+}
+
+output "query_columns" {
+  description = "Columns selected by the export, after applying the INCLUDE_* toggles."
+  value       = local.query_columns
 }

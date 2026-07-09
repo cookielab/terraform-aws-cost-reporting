@@ -1,112 +1,117 @@
-# -----------------------------------------------------------------------------
-# Resource Creation Toggles
-# -----------------------------------------------------------------------------
-
-variable "create_bucket" {
-  description = "Whether to create a new S3 bucket or use an existing one. When false, s3_bucket_name is required."
-  type        = bool
-  default     = true
-}
-
-variable "create_report" {
-  description = "Whether to create a new CUR report definition. Set to false if the account already has a CUR report configured."
-  type        = bool
-  default     = true
-}
+# =============================================================================
+# CUR 2.0 Source Module - Variables
+# =============================================================================
+# Creates a CUR 2.0 (BCM Data Exports) export that writes Parquet reports
+# directly, cross-account, into the central bucket owned by the target module.
+# Defaults mirror the CID data-exports template so CID SQL queries and
+# dashboards work against the resulting table unchanged.
+# =============================================================================
 
 # -----------------------------------------------------------------------------
-# Lambda / Target Account
+# Destination
 # -----------------------------------------------------------------------------
 
-variable "lambda_function_arn" {
-  description = "ARN of the Lambda function in the target account that will process CUR reports. Required when use_sns = false."
-  type        = string
-  default     = ""
-}
-
-variable "lambda_function_role_arn" {
-  description = "ARN of the IAM role for the Lambda function (for bucket policy)"
+variable "destination_bucket" {
+  description = "Name of the central bucket the export writes into (the target module's bucket)."
   type        = string
 }
 
-# -----------------------------------------------------------------------------
-# SNS Configuration
-# -----------------------------------------------------------------------------
-
-variable "use_sns" {
-  description = "Use SNS topic for S3 event notifications instead of direct Lambda invocation. When true, creates an SNS topic that the target Lambda can subscribe to."
-  type        = bool
-  default     = false
+variable "destination_region" {
+  description = "Region the destination bucket lives in. Not the export's own region - BCM Data Exports always lives in us-east-1."
+  type        = string
 }
 
-variable "sns_topic_name" {
-  description = "Name of the SNS topic for CUR notifications. Defaults to cur-notifications-{account_id}."
+variable "destination_bucket_owner" {
+  description = <<-EOT
+    AWS account ID that owns the destination bucket. Required for cross-account
+    delivery - passed to BCM Data Exports as S3BucketOwner so it can validate
+    the bucket in the owner account. Leave null for same-account delivery.
+  EOT
   type        = string
   default     = null
-}
 
-variable "sns_subscriber_arns" {
-  description = "List of ARNs (Lambda functions or SQS queues) allowed to subscribe to the SNS topic."
-  type        = list(string)
-  default     = []
-}
-
-# -----------------------------------------------------------------------------
-# S3 Bucket Configuration
-# -----------------------------------------------------------------------------
-
-variable "s3_bucket_name" {
-  description = "Name of the S3 bucket for CUR reports. If not provided, defaults to cur-csv-{account_id}"
-  type        = string
-  default     = null
-}
-
-variable "s3_bucket_lifecycle" {
-  description = "S3 bucket lifecycle configuration. Only used when create_bucket = true."
-  type = object({
-    transition_to_ia_days      = number
-    transition_to_glacier_days = number
-  })
-  default = {
-    transition_to_ia_days      = 90
-    transition_to_glacier_days = 180
+  validation {
+    condition     = var.destination_bucket_owner == null || can(regex("^[0-9]{12}$", var.destination_bucket_owner))
+    error_message = "destination_bucket_owner must be a 12-digit AWS account ID or null."
   }
 }
 
+variable "s3_prefix" {
+  description = <<-EOT
+    Prefix under the destination bucket, prepended before the export name.
+    Defaults to "cur2/<account_id>" (the CID layout), making the delivered path
+    <bucket>/cur2/<account_id>/<export_name>/data/BILLING_PERIOD=YYYY-MM/.
+    Every segment below the Glue table location is a partition key, so this is
+    load-bearing rather than cosmetic - change with care.
+  EOT
+  type        = string
+  default     = null
+}
+
 # -----------------------------------------------------------------------------
-# CUR Report Configuration
+# Export definition
 # -----------------------------------------------------------------------------
 
-variable "cur_time_unit" {
-  description = "Time unit for CUR report (HOURLY or DAILY)"
+variable "export_name" {
+  description = "Name of the export. Becomes a path segment, and therefore the value of the report_name Glue partition."
+  type        = string
+  default     = "cur2"
+}
+
+variable "description" {
+  description = "Description of the export."
+  type        = string
+  default     = "CUR 2.0 export aggregated in the central cost reporting bucket"
+}
+
+variable "time_granularity" {
+  description = <<-EOT
+    Granularity of the report rows. Not a safe in-place change: switching it
+    requires recreating the export, purging the delivered data and requesting a
+    backfill. HOURLY is recommended.
+  EOT
   type        = string
   default     = "HOURLY"
-}
 
-variable "cur_format" {
-  description = "Format for CUR report"
-  type        = string
-  default     = "textORcsv"
   validation {
-    condition     = contains(["textORcsv", "Parquet"], var.cur_format)
-    error_message = "Format must be either 'textORcsv' or 'Parquet'."
+    condition     = contains(["HOURLY", "DAILY", "MONTHLY"], var.time_granularity)
+    error_message = "time_granularity must be one of HOURLY, DAILY, MONTHLY."
   }
 }
 
-variable "cur_compression" {
-  description = "Compression format for CUR report"
-  type        = string
-  default     = "GZIP"
-  validation {
-    condition     = contains(["GZIP", "ZIP", "Parquet"], var.cur_compression)
-    error_message = "Compression must be either 'GZIP', 'ZIP', or 'Parquet'."
-  }
+variable "enable_split_cost_allocation_data" {
+  description = "Include split cost allocation data, adding the split_line_item_* columns. Disable if dataset size causes performance issues."
+  type        = bool
+  default     = true
 }
 
-variable "cur_s3_prefix" {
-  description = "S3 prefix for CUR reports. Only used when create_report = false to configure S3 notifications on an existing report."
+variable "enable_iam_principal_data" {
+  description = "Include IAM principal allocation data, adding the line_item_iam_principal column. Data is available from 2026-04-08 onwards."
+  type        = bool
+  default     = true
+}
+
+variable "billing_view_arn" {
+  description = "Billing view ARN to source the data from. Unset by default, matching the CID template, which sources from the account's primary billing view."
   type        = string
-  default     = "cur-reports"
+  default     = null
+}
+
+variable "overwrite" {
+  description = <<-EOT
+    Delivery mode for each refresh:
+    - OVERWRITE_REPORT: replace the report in place (a single current copy).
+    - CREATE_NEW_REPORT: keep every refresh as a timestamped snapshot.
+    OVERWRITE_REPORT is strongly preferred: snapshots multiply storage and break
+    the flat partition layout the Glue table expects.
+  EOT
+  type        = string
+  default     = "OVERWRITE_REPORT"
+
+  validation {
+    condition     = contains(["OVERWRITE_REPORT", "CREATE_NEW_REPORT"], var.overwrite)
+    error_message = "overwrite must be OVERWRITE_REPORT or CREATE_NEW_REPORT."
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -114,7 +119,7 @@ variable "cur_s3_prefix" {
 # -----------------------------------------------------------------------------
 
 variable "tags" {
-  description = "Tags to apply to resources"
+  description = "Tags to apply to the export. Values may not contain parentheses - AWS rejects them with InvalidTag."
   type        = map(string)
   default     = {}
 }
