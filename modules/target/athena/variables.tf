@@ -8,26 +8,41 @@ variable "cur_bucket_arn" {
   type        = string
 }
 
-variable "source_accounts" {
-  description = <<-EOT
-    Map of source account configurations for Athena/Glue crawlers.
-    Key is the source account identifier (used for table naming).
-    Required: destination_prefix (path in CUR bucket where reports are stored)
-  EOT
-  type = map(object({
-    account_id         = string
-    destination_prefix = string
-  }))
+variable "glue_database_name" {
+  description = "Name of the Glue database for CUR 2.0 data"
+  type        = string
+  default     = "cur2_database"
 }
 
-variable "accounts_with_misaligned_columns" {
+variable "data_export_prefix" {
+  description = "S3 prefix under the CUR bucket where Data Exports are delivered (the crawler scans this path)"
+  type        = string
+  default     = "cur2/"
+}
+
+variable "crawler_schedule" {
+  description = "Cron expression for the Glue crawler schedule (discovers partitions and reconciles schema)"
+  type        = string
+  default     = "cron(0 2 * * ? *)"
+}
+
+variable "account_map" {
   description = <<-EOT
-    Set of source account keys that have misaligned columns due to OpenCSVSerDe bug.
-    This occurs when the invoicing entity contains a comma (e.g., "Amazon Web Services, Inc.")
-    which causes column shifting in CSV parsing.
+    Optional account ID to name/client mapping, uploaded as a CSV and exposed as
+    the `account_map` Glue table for joins. Empty = do not manage the account map.
+    In practice you only fill account_id and account_name; the rest have defaults.
   EOT
-  type        = set(string)
-  default     = []
+  type = list(object({
+    account_id       = string
+    account_name     = string
+    client_id        = optional(string, "")
+    client_name      = optional(string, "")
+    payer_account_id = optional(string)
+    is_org_member    = optional(bool, true)
+    environment      = optional(string, "production")
+    active           = optional(bool, true)
+  }))
+  default = []
 }
 
 variable "athena_results_bucket_name" {

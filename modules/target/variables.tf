@@ -1,5 +1,5 @@
 # =============================================================================
-# Target Module Variables
+# Target Module Variables (CUR 2.0 Data Exports aggregation)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -7,28 +7,30 @@
 # -----------------------------------------------------------------------------
 
 variable "create_bucket" {
-  description = "Whether to create a new S3 bucket or use an existing one"
+  description = "Whether to create the central CUR bucket or use an existing one"
   type        = bool
   default     = true
 }
 
 variable "cur_reports_bucket_name" {
-  description = "Name of the S3 bucket for CUR reports (created if create_bucket=true, or name of existing bucket if create_bucket=false)"
+  description = "Name of the central S3 bucket for CUR 2.0 Data Exports (created if create_bucket=true, otherwise name of the existing bucket)"
   type        = string
 }
 
+variable "source_account_ids" {
+  description = "AWS account IDs allowed to deliver CUR 2.0 Data Exports into the bucket (used in the bucket policy). Only needed when create_bucket=true."
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_lifecycle_transitions" {
-  description = "Enable lifecycle transitions to cheaper storage classes for CUR reports"
+  description = "Enable lifecycle transitions to cheaper storage classes for CUR reports (reports are never deleted)"
   type        = bool
   default     = false
 }
 
 variable "cur_reports_bucket_lifecycle" {
-  description = <<-EOT
-    Lifecycle configuration for CUR reports bucket.
-    Only used when enable_lifecycle_transitions = true.
-    Reports are NEVER deleted - only transitioned to cheaper storage.
-  EOT
+  description = "Lifecycle transition configuration for the CUR bucket. Only used when enable_lifecycle_transitions = true."
   type = object({
     transition_ia_days      = optional(number, 30)
     transition_glacier_days = optional(number, 90)
@@ -39,118 +41,63 @@ variable "cur_reports_bucket_lifecycle" {
   }
 }
 
-variable "lambda_builds_bucket_id" {
-  description = "ID of bucket for Lambda builds (defaults to CUR bucket if not specified)"
-  type        = string
-  default     = ""
-}
-
 # -----------------------------------------------------------------------------
-# Source Accounts Configuration
-# -----------------------------------------------------------------------------
-
-variable "source_accounts" {
-  description = <<-EOT
-    Map of source account configurations for CUR forwarding.
-    Key: unique identifier for the source account (used for naming resources)
-
-    Required fields:
-    - account_id: AWS Account ID of the source account
-
-    Optional fields:
-    - bucket_name: S3 bucket name in source account (defaults to cur-csv-{account_id})
-    - source_prefix: S3 prefix in source bucket (defaults to cur-csv/)
-    - destination_prefix: S3 prefix in target bucket (defaults to {key}/)
-  EOT
-  type = map(object({
-    account_id         = string
-    bucket_name        = optional(string)
-    source_prefix      = optional(string)
-    destination_prefix = optional(string)
-  }))
-  default = {}
-}
-
-# -----------------------------------------------------------------------------
-# Lambda Configuration
-# -----------------------------------------------------------------------------
-
-variable "lambda_function_name" {
-  description = "Name of the Lambda function for CUR forwarding"
-  type        = string
-  default     = "cur-forwarder"
-}
-
-variable "log_retention_days" {
-  description = "CloudWatch log retention in days"
-  type        = number
-  default     = 14
-}
-
-# -----------------------------------------------------------------------------
-# Athena/Glue Configuration
+# Athena / Glue Configuration
 # -----------------------------------------------------------------------------
 
 variable "enable_athena" {
-  description = "Enable Athena workgroup and Glue catalog for CUR analysis"
+  description = "Enable the Athena workgroup and Glue catalog (database + crawler) for CUR 2.0 analysis"
   type        = bool
   default     = true
 }
 
-variable "athena_results_bucket_name_override" {
-  description = "Override name for Athena results bucket (defaults to {cur_reports_bucket_name}-athena-results)"
-  type        = string
-  default     = ""
-}
-
 variable "glue_database_name" {
-  description = "Name of the Glue database for partition management (empty = disable partition updates)"
+  description = "Name of the Glue database for CUR 2.0 data"
+  type        = string
+  default     = "cur2_database"
+}
+
+variable "data_export_prefix" {
+  description = "S3 prefix under the CUR bucket where Data Exports are delivered (the crawler scans this path)"
+  type        = string
+  default     = "cur2/"
+}
+
+variable "crawler_schedule" {
+  description = "Cron expression for the Glue crawler schedule (discovers partitions and reconciles schema)"
+  type        = string
+  default     = "cron(0 2 * * ? *)"
+}
+
+variable "account_map" {
+  description = <<-EOT
+    Optional account ID to name/client mapping, uploaded as a CSV and exposed as
+    the `account_map` Glue table for joins. Empty = do not manage the account map.
+    In practice you only fill account_id and account_name; the rest have defaults.
+  EOT
+  type = list(object({
+    account_id       = string
+    account_name     = string
+    client_id        = optional(string, "")
+    client_name      = optional(string, "")
+    payer_account_id = optional(string)
+    is_org_member    = optional(bool, true)
+    environment      = optional(string, "production")
+    active           = optional(bool, true)
+  }))
+  default = []
+}
+
+variable "athena_results_bucket_name_override" {
+  description = "Override name for the Athena results bucket (defaults to {cur_reports_bucket_name}-athena-results)"
   type        = string
   default     = ""
-}
-
-variable "glue_region" {
-  description = "AWS region where the Glue catalog lives (for cross-region Lambda calls)"
-  type        = string
-  default     = "eu-west-1"
-}
-
-variable "table_mapping" {
-  description = "Map of destination_prefix -> Glue table name for Lambda partition management"
-  type        = map(string)
-  default     = {}
 }
 
 variable "athena_query_results_retention_days" {
   description = "Days to retain Athena query results (temporary query outputs, not CUR data)"
   type        = number
   default     = 30
-}
-
-variable "athena_source_accounts" {
-  description = <<-EOT
-    Map of source accounts for Athena/Glue crawlers only (no Lambda functions).
-    Use this when you want to create crawlers for source accounts whose Lambda functions
-    are in a different region/module. Same structure as source_accounts.
-    If not provided, crawlers will be created from source_accounts.
-  EOT
-  type = map(object({
-    account_id         = string
-    bucket_name        = optional(string)
-    source_prefix      = optional(string)
-    destination_prefix = optional(string)
-  }))
-  default = {}
-}
-
-variable "accounts_with_misaligned_columns" {
-  description = <<-EOT
-    Set of source account keys that have misaligned columns due to OpenCSVSerDe bug.
-    This occurs when the invoicing entity contains a comma (e.g., "Amazon Web Services, Inc.")
-    which causes column shifting in CSV parsing. Named queries will be created to fix these.
-  EOT
-  type        = set(string)
-  default     = []
 }
 
 # -----------------------------------------------------------------------------

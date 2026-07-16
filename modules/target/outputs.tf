@@ -1,26 +1,11 @@
 output "bucket_id" {
-  description = "ID of the aggregated CUR S3 bucket"
+  description = "ID of the aggregated CUR 2.0 S3 bucket"
   value       = local.cur_bucket_id
 }
 
 output "bucket_arn" {
-  description = "ARN of the aggregated CUR S3 bucket"
+  description = "ARN of the aggregated CUR 2.0 S3 bucket"
   value       = local.cur_bucket_arn
-}
-
-output "lambda_function_arn" {
-  description = "ARN of the Lambda function (use this in source account S3 event notifications)"
-  value       = module.lambda_forwarder.lambda_function_arn
-}
-
-output "lambda_function_name" {
-  description = "Name of the Lambda function"
-  value       = module.lambda_forwarder.lambda_function_name
-}
-
-output "lambda_role_arn" {
-  description = "ARN of the Lambda function's IAM role (use this in source account bucket policies)"
-  value       = module.lambda_forwarder.lambda_role_arn
 }
 
 output "athena_workgroup_name" {
@@ -29,8 +14,13 @@ output "athena_workgroup_name" {
 }
 
 output "glue_database_name" {
-  description = "Name of the Glue catalog database for CUR data"
+  description = "Name of the Glue catalog database for CUR 2.0 data"
   value       = var.enable_athena ? module.athena[0].glue_database_name : null
+}
+
+output "glue_crawler_name" {
+  description = "Name of the Glue crawler that owns the cur2 table"
+  value       = var.enable_athena ? module.athena[0].crawler_name : null
 }
 
 output "reader_role_arn" {

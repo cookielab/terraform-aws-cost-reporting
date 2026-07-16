@@ -1,26 +1,34 @@
 # =============================================================================
-# CUR Reports S3 Bucket (Target Account)
+# CUR 2.0 Reports S3 Bucket (Target / central account)
 # =============================================================================
 
-# IAM Policy Document for bucket policy
+# Bucket policy: allow AWS BCM Data Exports to deliver reports cross-account.
 data "aws_iam_policy_document" "cur_bucket_policy" {
   count = var.create_bucket ? 1 : 0
 
   statement {
-    sid    = "AllowCrossAccountLambdaWrite"
+    sid    = "EnableAWSDataExportsToWriteToS3"
     effect = "Allow"
 
     principals {
-      type        = "AWS"
-      identifiers = [for k, v in local.source_accounts_full : "arn:aws:iam::${v.account_id}:root"]
+      type        = "Service"
+      identifiers = ["bcm-data-exports.amazonaws.com"]
     }
 
-    actions = [
-      "s3:PutObject",
-      "s3:PutObjectAcl"
-    ]
-
+    actions   = ["s3:PutObject"]
     resources = ["arn:aws:s3:::${var.cur_reports_bucket_name}/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = var.source_account_ids
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = [for id in var.source_account_ids : "arn:aws:bcm-data-exports:us-east-1:${id}:export/*"]
+    }
   }
 }
 
@@ -31,6 +39,10 @@ module "cur_bucket" {
   count = var.create_bucket ? 1 : 0
 
   bucket = var.cur_reports_bucket_name
+
+  versioning = {
+    enabled = true
+  }
 
   server_side_encryption_configuration = {
     rule = {
@@ -45,18 +57,14 @@ module "cur_bucket" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 
-  # CUR reports lifecycle - NEVER delete
-  # Transitions to cheaper storage only when enable_lifecycle_transitions = true
+  # CUR data is NEVER deleted; only optionally transitioned to cheaper storage.
   lifecycle_rule = concat(
-    # Transition to cheaper storage (optional)
     var.enable_lifecycle_transitions ? [
       {
         id     = "transition_to_cheaper_storage"
         status = "Enabled"
 
-        filter = {
-          prefix = ""
-        }
+        filter = { prefix = "" }
 
         transition = [
           {
@@ -69,23 +77,18 @@ module "cur_bucket" {
           }
         ]
 
-        # NO expiration - keep reports forever
-
         abort_incomplete_multipart_upload_days = 7
       }
     ] : [],
-    # Always expire lambda builds
     [
       {
-        id     = "expire_lambda_builds"
+        id     = "expire_noncurrent_versions"
         status = "Enabled"
 
-        filter = {
-          prefix = "lambda-builds/"
-        }
+        filter = { prefix = "" }
 
-        expiration = {
-          days = 30
+        noncurrent_version_expiration = {
+          noncurrent_days = 30
         }
 
         abort_incomplete_multipart_upload_days = 7
@@ -100,8 +103,8 @@ module "cur_bucket" {
   policy        = data.aws_iam_policy_document.cur_bucket_policy[0].json
 
   tags = merge(var.tags, {
-    Name      = "Aggregated CUR Reports"
-    Purpose   = "Central storage for AWS Cost and Usage Reports from multiple source accounts"
+    Name      = "Aggregated CUR 2.0 Reports"
+    Purpose   = "Central storage for AWS CUR 2.0 Data Exports from multiple source accounts"
     ManagedBy = "Terraform"
   })
 }
