@@ -1,11 +1,14 @@
 # =============================================================================
-# CUR 2.0 Reports S3 Bucket (Target / central account)
+# CUR 2.0 Target Module - Central S3 Bucket & Cross-Account Bucket Policy
 # =============================================================================
 
-# Bucket policy: allow AWS BCM Data Exports to deliver reports cross-account.
-data "aws_iam_policy_document" "cur_bucket_policy" {
-  count = var.create_bucket ? 1 : 0
-
+# Bucket policy authorizing every source account's CUR 2.0 export to write
+# reports into this bucket. Mirrors the required policy from the AWS docs:
+# https://docs.aws.amazon.com/cur/latest/userguide/dataexports-s3-bucket.html
+# One combined statement for all authorized accounts (each account's export ARN
+# embeds its own account ID, so the ArnLike + SourceAccount lists cannot be
+# mixed across accounts).
+data "aws_iam_policy_document" "bucket_policy" {
   statement {
     sid    = "EnableAWSDataExportsToWriteToS3"
     effect = "Allow"
@@ -16,30 +19,30 @@ data "aws_iam_policy_document" "cur_bucket_policy" {
     }
 
     actions   = ["s3:PutObject"]
-    resources = ["arn:aws:s3:::${var.cur_reports_bucket_name}/*"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "aws:SourceAccount"
-      values   = var.source_account_ids
-    }
+    resources = ["${local.bucket_arn}/*"]
 
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"
-      values   = [for id in var.source_account_ids : "arn:aws:bcm-data-exports:us-east-1:${id}:export/*"]
+      values   = local.source_arn_patterns
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = local.authorized_account_ids
     }
   }
 }
 
 module "cur_bucket" {
   source  = "terraform-aws-modules/s3-bucket/aws"
-  version = "3.15.2"
+  version = "5.14.1"
 
-  count = var.create_bucket ? 1 : 0
+  bucket = var.bucket_name
 
-  bucket = var.cur_reports_bucket_name
-
+  # Share the durability properties of the current source/target buckets:
+  # versioning + SSE + fully private.
   versioning = {
     enabled = true
   }
@@ -57,7 +60,18 @@ module "cur_bucket" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 
-  # CUR data is NEVER deleted; only optionally transitioned to cheaper storage.
+  # Disable ACLs (recommended by the Data Exports docs) so delivered objects are
+  # owned by the bucket owner and access is controlled purely by the policy.
+  control_object_ownership = true
+  object_ownership         = "BucketOwnerEnforced"
+
+  attach_policy = true
+  policy        = data.aws_iam_policy_document.bucket_policy.json
+
+  # CUR reports are the source of truth and are NEVER expired. Lifecycle mirrors
+  # the CID/CUDOS data bucket: reclaim old non-current versions and clean up
+  # incomplete multipart uploads / expired delete markers. Transitions to
+  # cheaper storage are opt-in.
   lifecycle_rule = concat(
     var.enable_lifecycle_transitions ? [
       {
@@ -68,43 +82,46 @@ module "cur_bucket" {
 
         transition = [
           {
-            days          = var.cur_reports_bucket_lifecycle.transition_ia_days
+            days          = var.lifecycle_transitions.transition_ia_days
             storage_class = "STANDARD_IA"
           },
           {
-            days          = var.cur_reports_bucket_lifecycle.transition_glacier_days
+            days          = var.lifecycle_transitions.transition_glacier_days
             storage_class = "GLACIER"
-          }
+          },
         ]
-
-        abort_incomplete_multipart_upload_days = 7
       }
     ] : [],
     [
       {
-        id     = "expire_noncurrent_versions"
+        id     = "RemoveNonCurrentVersions"
         status = "Enabled"
 
         filter = { prefix = "" }
 
         noncurrent_version_expiration = {
-          noncurrent_days = 30
+          newer_noncurrent_versions = var.noncurrent_versions_to_keep
+          noncurrent_days           = var.noncurrent_version_expiration_days
         }
+      },
+      {
+        id     = "DeleteIncompleteMultipartUploadsAndExpiredDeleteMarkers"
+        status = "Enabled"
 
-        abort_incomplete_multipart_upload_days = 7
+        filter = { prefix = "" }
+
+        abort_incomplete_multipart_upload_days = var.abort_multipart_days
+
+        expiration = {
+          expired_object_delete_marker = true
+        }
       }
-    ]
+    ],
   )
-
-  control_object_ownership = true
-  object_ownership         = "BucketOwnerPreferred"
-
-  attach_policy = true
-  policy        = data.aws_iam_policy_document.cur_bucket_policy[0].json
 
   tags = merge(var.tags, {
     Name      = "Aggregated CUR 2.0 Reports"
-    Purpose   = "Central storage for AWS CUR 2.0 Data Exports from multiple source accounts"
+    Purpose   = "Central storage for AWS CUR 2.0 BCM Data Exports from multiple source accounts"
     ManagedBy = "Terraform"
   })
 }

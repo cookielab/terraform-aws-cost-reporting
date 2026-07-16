@@ -8,9 +8,9 @@ exposes it through Athena. There is no forwarding Lambda and no CSV.
 - **`modules/source`** – Deployed in each source account. Creates one BCM Data
   Exports export (CUR 2.0) that writes Parquet directly into the central bucket.
 - **`modules/target`** – Deployed in the central account. Owns the aggregation
-  bucket, a Glue database + crawler that discovers partitions and reconciles the
-  schema, an Athena workgroup, an optional `account_map` reference table, and
-  optional read-only IAM access.
+  bucket, the Glue database + pre-created `cur2` table + crawler that discovers
+  partitions and reconciles the schema, and an optional `account_map` reference
+  table.
 
 ## Architecture
 
@@ -51,18 +51,16 @@ Delivered layout (every segment below the table location is a partition key):
 module "cur_target" {
   source = "cookielab/cost-reporting/aws//modules/target"
 
-  cur_reports_bucket_name = "clb-cur2"
+  bucket_name = "clb-cur2"
 
   # Accounts allowed to deliver Data Exports into the bucket (bucket policy).
+  # The bucket-owning account is authorized automatically.
   source_account_ids = ["111111111111", "222222222222"]
 
-  # Optional reference table for readable account/client names in queries.
+  # Optional reference table joining accounts to clients (for per-client cost).
   account_map = [
-    { account_id = "111111111111", account_name = "Prod" },
-    { account_id = "222222222222", account_name = "Staging" },
+    { account_id = "111111111111", account_name = "Prod", client_id = "acme", client_name = "Acme", payer_account_id = "111111111111", is_org_member = true, environment = "production", active = true },
   ]
-
-  enable_athena = true
 }
 ```
 
@@ -131,55 +129,76 @@ data-exports template so CID SQL/dashboards work against the resulting table.
 
 ## Target Module
 
-Owns the central bucket and catalogues the delivered exports with a Glue
-crawler. The crawler creates and maintains the `cur2` table (schema + all
-partitions) on a schedule — Terraform does not define the table columns.
+Owns the central bucket and the Glue catalog. Terraform pre-creates the `cur2`
+table with named partition keys and the CID column set; the Glue crawler then
+adds partitions and reconciles new columns on a schedule. Also manages an
+optional `account_map` reference table, an optional Athena workgroup (with a
+query-results bucket), and optional read-only IAM (role/user). The Athena and
+reader pieces can be turned off to reuse existing infrastructure.
 
 ### Requirements
 
 | Name | Version |
 |------|---------|
 | terraform | >= 1.5, < 2.0 |
-| aws | >= 5.27 |
+| aws | >= 6.0 |
 
 ### Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| cur_reports_bucket_name | Name of the central CUR 2.0 bucket | `string` | n/a | yes |
-| create_bucket | Create the bucket or use an existing one | `bool` | `true` | no |
-| source_account_ids | Account IDs allowed to deliver Data Exports (bucket policy) | `list(string)` | `[]` | no |
-| enable_lifecycle_transitions | Transition older data to cheaper storage (never deletes) | `bool` | `false` | no |
-| cur_reports_bucket_lifecycle | Transition-day configuration | `object` | `{ia=30, glacier=90}` | no |
-| enable_athena | Create Athena workgroup + Glue database/crawler | `bool` | `true` | no |
+| bucket_name | Name of the central CUR 2.0 bucket | `string` | `"clb-cur2"` | no |
+| source_account_ids | Account IDs allowed to deliver Data Exports (bucket-owner is added automatically) | `list(string)` | `[]` | no |
+| export_region | Region used to build the `aws:SourceArn` condition ARNs | `string` | `"us-east-1"` | no |
+| noncurrent_version_expiration_days | Delete non-current object versions after N days | `number` | `7` | no |
+| noncurrent_versions_to_keep | Newer non-current versions always retained | `number` | `1` | no |
+| abort_multipart_days | Abort incomplete multipart uploads after N days | `number` | `7` | no |
+| enable_lifecycle_transitions | Transition current CUR objects to cheaper storage (never deletes) | `bool` | `false` | no |
+| lifecycle_transitions | Storage-class transition schedule (when transitions enabled) | `object` | `{ia=90, glacier=180}` | no |
 | glue_database_name | Glue database name | `string` | `"cur2_database"` | no |
-| data_export_prefix | Prefix the crawler scans | `string` | `"cur2/"` | no |
-| crawler_schedule | Crawler cron schedule | `string` | `"cron(0 2 * * ? *)"` | no |
-| account_map | Optional account→name/client mapping (CSV + Glue table) | `list(object)` | `[]` | no |
-| athena_results_bucket_name_override | Override for the Athena results bucket name | `string` | `""` | no |
+| glue_table_name | Glue table name | `string` | `"cur2"` | no |
+| account_map | Optional account→client mapping (CSV + Glue table); all fields required | `list(object)` | `[]` | no |
+| account_map_prefix | S3 key prefix for the account_map CSV (outside `cur2/`) | `string` | `"reference/account_map"` | no |
+| crawler_name | Name of the Glue crawler | `string` | `"cur2-crawler"` | no |
+| crawler_role_name | Name of the crawler IAM role | `string` | `"cur2-crawler-role"` | no |
+| crawler_schedule | Crawler cron schedule (null to disable) | `string` | `"cron(0 2 * * ? *)"` | no |
+| enable_athena | Create an Athena workgroup + query-results bucket | `bool` | `true` | no |
+| athena_workgroup_name | Athena workgroup name | `string` | `"cur2-analysis"` | no |
+| athena_results_bucket_name | Query-results bucket name (defaults to `<bucket_name>-athena-results`) | `string` | `""` | no |
 | athena_query_results_retention_days | Retention for temporary query outputs | `number` | `30` | no |
-| create_reader_role | Create read-only IAM role (AssumeRole) | `bool` | `true` | no |
+| create_reader_role | Create a read-only IAM role (AssumeRole) | `bool` | `true` | no |
 | require_mfa_for_reader_role | Require MFA to assume the reader role | `bool` | `true` | no |
-| create_reader_user | Create read-only IAM user with access keys | `bool` | `false` | no |
+| create_reader_user | Create a read-only IAM user with static access keys | `bool` | `false` | no |
+| reader_name_prefix | Prefix for reader IAM resource names | `string` | `"cur2"` | no |
 | tags | Tags to apply to resources | `map(string)` | `{}` | no |
 
 ### Outputs
 
 | Name | Description |
 |------|-------------|
-| bucket_id | ID of the aggregated CUR 2.0 bucket |
-| bucket_arn | ARN of the aggregated CUR 2.0 bucket |
-| athena_workgroup_name | Athena workgroup name |
-| glue_database_name | Glue database name |
-| glue_crawler_name | Name of the crawler that owns the `cur2` table |
-| reader_role_arn | IAM role ARN for read-only access |
-| reader_access_key_id | Access key ID for the reader user (sensitive) |
-| reader_secret_access_key | Secret access key for the reader user (sensitive) |
+| bucket_id | Name/ID of the central CUR 2.0 bucket |
+| bucket_arn | ARN of the central CUR 2.0 bucket |
+| authorized_account_ids | Account IDs authorized to write into the bucket |
+| glue_database_name | Glue catalog database name |
+| glue_database_arn | Glue catalog database ARN |
+| glue_table_name | Glue table covering every account's export |
+| account_map_table_name | account_map Glue table name (null when unset) |
+| crawler_name | Name of the Glue crawler |
+| athena_workgroup_name | Athena workgroup name (null when disabled) |
+| reader_role_arn | Read-only IAM role ARN (null when disabled) |
+| reader_access_key_id | Reader user access key ID (sensitive, null when disabled) |
+| reader_secret_access_key | Reader user secret key (sensitive, null when disabled) |
 
 ## Notes
 
-- The Glue crawler owns the `cur2` table. Right after the first `terraform
-  apply` the table does not exist yet — it appears after the crawler's first run
-  (trigger it manually once, or wait for the schedule).
-- `account_map` only requires `account_id` and `account_name` per entry; the
-  remaining columns (`client_id`, `environment`, …) have sensible defaults.
+- The `cur2` Glue table is **pre-created by Terraform** with named partition keys
+  (`source_account_id`, `report_name`, `data`, `billing_period`) and the CID
+  column set. The crawler then only adds partitions and reconciles new columns
+  (`MergeNewColumns`) — Terraform ignores those changes via `lifecycle`.
+  Letting the crawler create the table would name the first three partition
+  levels `partition_0..2`, which is why it is declared here instead.
+- Athena workgroup and reader IAM are created by default. Set `enable_athena =
+  false` and the `create_reader_*` flags to `false` to reuse existing
+  infrastructure (as the SRE setup does with the legacy `cur-analysis` workgroup).
+- `account_map` values must not contain commas or newlines (LazySimpleSerDe
+  cannot escape them); a validation enforces this.
