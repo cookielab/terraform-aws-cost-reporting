@@ -23,4 +23,6 @@ locals {
     for account_id in local.authorized_account_ids :
     "arn:aws:bcm-data-exports:${var.export_region}:${account_id}:export/*"
   ]
+
+  athena_results_bucket_name = var.athena_results_bucket_name != "" ? var.athena_results_bucket_name : "${var.bucket_name}-athena-results"
 }

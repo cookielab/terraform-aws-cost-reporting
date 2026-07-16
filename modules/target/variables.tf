@@ -188,6 +188,66 @@ variable "crawler_schedule" {
 }
 
 # -----------------------------------------------------------------------------
+# Athena (optional)
+# -----------------------------------------------------------------------------
+# A fresh consumer needs somewhere to run queries. Set enable_athena = false to
+# reuse an existing workgroup (e.g. the SRE setup shares the legacy one).
+
+variable "enable_athena" {
+  description = "Create an Athena workgroup and its query-results bucket for querying the CUR 2.0 data."
+  type        = bool
+  default     = true
+}
+
+variable "athena_workgroup_name" {
+  description = "Name of the Athena workgroup (only when enable_athena = true)."
+  type        = string
+  default     = "cur2-analysis"
+}
+
+variable "athena_results_bucket_name" {
+  description = "Name for the Athena query-results bucket. Defaults to `<bucket_name>-athena-results`."
+  type        = string
+  default     = ""
+}
+
+variable "athena_query_results_retention_days" {
+  description = "Days to retain Athena query results (temporary query outputs, not CUR data)."
+  type        = number
+  default     = 30
+}
+
+# -----------------------------------------------------------------------------
+# Reader access (optional)
+# -----------------------------------------------------------------------------
+# Read-only identities for querying the data (e.g. Grafana, ClickHouse). Set
+# both to false to manage read access yourself against the module outputs.
+
+variable "create_reader_role" {
+  description = "Create a read-only IAM role (assumed from within the account) with S3 + Glue + Athena read access."
+  type        = bool
+  default     = true
+}
+
+variable "require_mfa_for_reader_role" {
+  description = "Require MFA when assuming the reader role."
+  type        = bool
+  default     = true
+}
+
+variable "create_reader_user" {
+  description = "Create a read-only IAM user with static access keys (for tools that cannot assume a role)."
+  type        = bool
+  default     = false
+}
+
+variable "reader_name_prefix" {
+  description = "Prefix for reader IAM resource names (role `<prefix>-reader-role`, user `svc-<prefix>-reader`)."
+  type        = string
+  default     = "cur2"
+}
+
+# -----------------------------------------------------------------------------
 # General
 # -----------------------------------------------------------------------------
 

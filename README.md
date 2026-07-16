@@ -132,8 +132,9 @@ data-exports template so CID SQL/dashboards work against the resulting table.
 Owns the central bucket and the Glue catalog. Terraform pre-creates the `cur2`
 table with named partition keys and the CID column set; the Glue crawler then
 adds partitions and reconciles new columns on a schedule. Also manages an
-optional `account_map` reference table. Does not create an Athena workgroup or
-reader IAM — those are wired up separately.
+optional `account_map` reference table, an optional Athena workgroup (with a
+query-results bucket), and optional read-only IAM (role/user). The Athena and
+reader pieces can be turned off to reuse existing infrastructure.
 
 ### Requirements
 
@@ -161,6 +162,14 @@ reader IAM — those are wired up separately.
 | crawler_name | Name of the Glue crawler | `string` | `"cur2-crawler"` | no |
 | crawler_role_name | Name of the crawler IAM role | `string` | `"cur2-crawler-role"` | no |
 | crawler_schedule | Crawler cron schedule (null to disable) | `string` | `"cron(0 2 * * ? *)"` | no |
+| enable_athena | Create an Athena workgroup + query-results bucket | `bool` | `true` | no |
+| athena_workgroup_name | Athena workgroup name | `string` | `"cur2-analysis"` | no |
+| athena_results_bucket_name | Query-results bucket name (defaults to `<bucket_name>-athena-results`) | `string` | `""` | no |
+| athena_query_results_retention_days | Retention for temporary query outputs | `number` | `30` | no |
+| create_reader_role | Create a read-only IAM role (AssumeRole) | `bool` | `true` | no |
+| require_mfa_for_reader_role | Require MFA to assume the reader role | `bool` | `true` | no |
+| create_reader_user | Create a read-only IAM user with static access keys | `bool` | `false` | no |
+| reader_name_prefix | Prefix for reader IAM resource names | `string` | `"cur2"` | no |
 | tags | Tags to apply to resources | `map(string)` | `{}` | no |
 
 ### Outputs
@@ -175,6 +184,10 @@ reader IAM — those are wired up separately.
 | glue_table_name | Glue table covering every account's export |
 | account_map_table_name | account_map Glue table name (null when unset) |
 | crawler_name | Name of the Glue crawler |
+| athena_workgroup_name | Athena workgroup name (null when disabled) |
+| reader_role_arn | Read-only IAM role ARN (null when disabled) |
+| reader_access_key_id | Reader user access key ID (sensitive, null when disabled) |
+| reader_secret_access_key | Reader user secret key (sensitive, null when disabled) |
 
 ## Notes
 
@@ -184,7 +197,8 @@ reader IAM — those are wired up separately.
   (`MergeNewColumns`) — Terraform ignores those changes via `lifecycle`.
   Letting the crawler create the table would name the first three partition
   levels `partition_0..2`, which is why it is declared here instead.
-- The module does **not** create an Athena workgroup or reader IAM — wire those
-  up separately (the SRE setup reuses the existing `cur-analysis` workgroup).
+- Athena workgroup and reader IAM are created by default. Set `enable_athena =
+  false` and the `create_reader_*` flags to `false` to reuse existing
+  infrastructure (as the SRE setup does with the legacy `cur-analysis` workgroup).
 - `account_map` values must not contain commas or newlines (LazySimpleSerDe
   cannot escape them); a validation enforces this.

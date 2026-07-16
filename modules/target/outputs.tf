@@ -41,3 +41,25 @@ output "crawler_name" {
   description = "Name of the Glue crawler (run on demand with `aws glue start-crawler`)."
   value       = aws_glue_crawler.cur2.name
 }
+
+output "athena_workgroup_name" {
+  description = "Athena workgroup name, or null when enable_athena is false."
+  value       = var.enable_athena ? aws_athena_workgroup.cur2[0].name : null
+}
+
+output "reader_role_arn" {
+  description = "ARN of the read-only IAM role, or null when create_reader_role is false."
+  value       = var.create_reader_role ? aws_iam_role.reader[0].arn : null
+}
+
+output "reader_access_key_id" {
+  description = "Access key ID for the reader IAM user, or null when create_reader_user is false."
+  value       = var.create_reader_user ? aws_iam_access_key.reader[0].id : null
+  sensitive   = true
+}
+
+output "reader_secret_access_key" {
+  description = "Secret access key for the reader IAM user, or null when create_reader_user is false."
+  value       = var.create_reader_user ? aws_iam_access_key.reader[0].secret : null
+  sensitive   = true
+}
