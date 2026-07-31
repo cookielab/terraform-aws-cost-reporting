@@ -82,12 +82,19 @@ resource "aws_glue_catalog_table" "cur2" {
     }
   }
 
-  # The crawler owns the schema after first run (MergeNewColumns) and stamps
-  # UPDATED_BY_CRAWLER into the parameters. Terraform must not fight it.
+  # The crawler owns the table after first run (MergeNewColumns): besides the
+  # schema and table parameters it also rewrites owner, the storage descriptor's
+  # own parameters (CrawlerSchema*, recordCount, sizeKey, ...), number_of_buckets
+  # and drops the SerDe name on every crawl. Terraform must not fight any of it,
+  # or every crawl re-creates the same plan drift.
   lifecycle {
     ignore_changes = [
+      owner,
       parameters,
       storage_descriptor[0].columns,
+      storage_descriptor[0].number_of_buckets,
+      storage_descriptor[0].parameters,
+      storage_descriptor[0].ser_de_info[0].name,
     ]
   }
 }
